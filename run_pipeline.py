@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+# Allow `python run_pipeline.py` / Colab %run from any cwd
+_REPO_ROOT = Path(__file__).resolve().parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from ra_update.config import (
     INPUT_DIR,
@@ -15,6 +21,13 @@ from ra_update.config import (
 )
 from ra_update.file_select import ensure_input_folders, resolve_xlsx
 from ra_update.pipeline import run_pipeline
+
+
+def _default_interactive() -> bool:
+    """Colab / no-TTY → non-interactive (use preferred or sole file)."""
+    if Path("/content").exists():
+        return False
+    return sys.stdin.isatty()
 
 
 def main() -> None:
@@ -52,13 +65,27 @@ def main() -> None:
         action="store_true",
         help=(
             "Do not prompt for files, missing equipment, or BAF create-until; "
-            "uses preferred filenames or the sole file in each folder"
+            "uses preferred filenames or the sole file in each folder "
+            "(default on Colab / non-TTY)"
         ),
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Force interactive prompts even on Colab",
     )
     args = parser.parse_args()
 
     ensure_input_folders(RA_INPUT_DIR, UPDATE_INPUT_DIR, OUTPUT_DIR)
-    interactive = not args.non_interactive
+    if args.interactive:
+        interactive = True
+    elif args.non_interactive:
+        interactive = False
+    else:
+        interactive = _default_interactive()
+    print(f"Mode: {'interactive' if interactive else 'non-interactive'}")
+    print(f"INPUT_DIR : {INPUT_DIR}")
+    print(f"OUTPUT_DIR: {OUTPUT_DIR}")
 
     ra_path = resolve_xlsx(
         "rate agreement (Advanced Export)",

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from ra_compare.config import (
     BASELINE_DIR,
@@ -14,6 +19,12 @@ from ra_compare.config import (
 from ra_compare.pipeline import run_compare_pipeline
 from ra_update.file_select import ensure_input_folders, list_xlsx, resolve_xlsx
 from ra_update.output_names import stem_from_baseline_and_candidate
+
+
+def _default_interactive() -> bool:
+    if Path("/content").exists():
+        return False
+    return sys.stdin.isatty()
 
 
 def _newest_updated_ra(folder: Path) -> str | None:
@@ -77,13 +88,26 @@ def main() -> None:
     parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Use preferred baseline name and newest *_updated_* without prompting",
+        help="Use preferred baseline name and newest *_updated_* without prompting (default on Colab)",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Force interactive file prompts even on Colab",
     )
     args = parser.parse_args()
 
     out_dir = args.output_dir or OUTPUT_DIR
     ensure_input_folders(BASELINE_DIR, CANDIDATE_DIR, out_dir)
-    interactive = not args.non_interactive
+    if args.interactive:
+        interactive = True
+    elif args.non_interactive:
+        interactive = False
+    else:
+        interactive = _default_interactive()
+    print(f"Mode: {'interactive' if interactive else 'non-interactive'}")
+    print(f"Baseline dir: {BASELINE_DIR}")
+    print(f"Output dir  : {out_dir}")
 
     baseline = resolve_xlsx(
         "baseline rate agreement",
