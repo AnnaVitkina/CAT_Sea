@@ -86,12 +86,14 @@ DFT_COLUMN_RULES: dict[str, ChargeRule] = {
         require_period=False,
         sheets=frozenset({"BASE"}),
     ),
+    # *DFTWM_COGH → fee-only Handled Goods Fee (no equipment), Weight/chargeable kg
     "*DFTWM_COGH": ChargeRule(
         charge_key="DFTWM_COGH",
         ra_fee_name="Handled Goods Fee",
         ra_equipment=None,
         require_period=False,
         sheets=frozenset({"BASE"}),
+        rate_by=DFT_WEIGHT_RATE_BY,
     ),
     # *DFTWM_SCANAL → fee-only Suez Canal Charge (no equipment), Weight/chargeable kg
     "*DFTWM_SCANAL_O": ChargeRule(

@@ -54,10 +54,20 @@ def lane_soft_key(lane: RaLane) -> str:
 
 
 def cost_logical_key(cc) -> str:
+    """
+    Logical cost identity (fee + equipment + period).
+
+    Weight DFT BAF / EU ETS: period-only headers
+    (`BAF Fee (01.06.2026 - 14.07.2026)`) are equivalent to DFT-tagged ones
+    (`BAF Fee (DFT 01.06.2026 - 14.07.2026)`) — same fee and dates.
+    """
+    fee = re.sub(r"\s+", " ", (cc.fee_name or "").strip().upper())
     eq = (cc.equipment or "").upper()
+    if fee in {"BAF FEE", "EU ETS FEE"} and eq in {"", "DFT"}:
+        eq = "DFT"
     return "|".join(
         [
-            re.sub(r"\s+", " ", (cc.fee_name or "").strip().upper()),
+            fee,
             eq,
             date_str(cc.valid_from),
             date_str(cc.valid_to),

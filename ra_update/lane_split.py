@@ -48,6 +48,58 @@ def cost_update_leaks_outside_update(
     return False
 
 
+def compute_safe_write_validity(
+    lane: RaLane,
+    costs: list[CostColumn],
+    update_from: date,
+    update_to: date,
+) -> tuple[date, date]:
+    """
+    Minimal lane cut that still contains the update and prevents cost leaks.
+
+    Period costs that do not apply before the update may leave the lane start
+    alone (e.g. BAF Fee 15.07-31.10 on lane 01.06-31.10 for update 15.07-14.10
+    → safe write validity 01.06-14.10, not 15.07-14.10). Period-less costs
+    force an exact update window.
+    """
+    if lane.valid_from is None or lane.valid_to is None:
+        return update_from, update_to
+
+    need_cut_before = False
+    need_cut_after = False
+    for cost in costs:
+        if cost.valid_from is None or cost.valid_to is None:
+            need_cut_before = True
+            need_cut_after = True
+            continue
+        applied_from = max(cost.valid_from, lane.valid_from)
+        applied_to = min(cost.valid_to, lane.valid_to)
+        if applied_from > applied_to:
+            continue
+        # Only constrain when this cost actually hits the update window
+        hit_from = max(applied_from, update_from)
+        hit_to = min(applied_to, update_to)
+        if hit_from > hit_to:
+            continue
+        if applied_from < update_from:
+            need_cut_before = True
+        if applied_to > update_to:
+            need_cut_after = True
+
+    safe_from = update_from if need_cut_before else lane.valid_from
+    safe_to = update_to if need_cut_after else lane.valid_to
+    safe_from = max(safe_from, lane.valid_from)
+    safe_to = min(safe_to, lane.valid_to)
+    if safe_from > safe_to:
+        return update_from, update_to
+    # Must still contain the update
+    safe_from = min(safe_from, update_from)
+    safe_to = max(safe_to, update_to)
+    safe_from = max(safe_from, lane.valid_from)
+    safe_to = min(safe_to, lane.valid_to)
+    return safe_from, safe_to
+
+
 @dataclass
 class SplitAction:
     action: str  # cut_original | duplicate_update | duplicate_after
@@ -137,44 +189,57 @@ def ensure_exact_validity_lane(
     lane: RaLane,
     update_from: date,
     update_to: date,
+    target_from: date | None = None,
+    target_to: date | None = None,
 ) -> tuple[RaLane, list[SplitAction]]:
     """
-    Ensure there is a lane with Valid from/to exactly equal to the update period.
+    Ensure there is a lane whose validity equals the write target window.
 
-    If the matched lane is wider:
-      1) cut original to the pre-update segment (when it exists)
-      2) duplicate a lane with the update validity
-      3) duplicate a post-update remainder lane when needed (no gaps)
+    Default target is the exact update period (BASE). For ETSBAF, pass a
+    leak-safe window from compute_safe_write_validity (may be wider than the
+    update where period costs do not apply).
+
+    If the matched lane is wider than the target:
+      1) cut original to the pre-target segment (when it exists)
+      2) duplicate a lane with the target validity
+      3) duplicate a post-target remainder lane when needed (no gaps)
     """
     actions: list[SplitAction] = []
+    t_from = target_from if target_from is not None else update_from
+    t_to = target_to if target_to is not None else update_to
 
     if lane.valid_from is None or lane.valid_to is None:
         raise ValueError(f"Lane {lane.lane_no} missing validity")
 
-    if periods_equal(lane.valid_from, lane.valid_to, update_from, update_to):
+    if periods_equal(lane.valid_from, lane.valid_to, t_from, t_to):
         return lane, actions
 
     existing = find_exact_validity_lane(
-        ra, key=key, template=lane, update_from=update_from, update_to=update_to
+        ra, key=key, template=lane, update_from=t_from, update_to=t_to
     )
     if existing is not None:
         return existing, actions
 
     l_from, l_to = lane.valid_from, lane.valid_to
-    if update_from < l_from or update_to > l_to:
+    if t_from < l_from or t_to > l_to:
         raise ValueError(
-            f"Update {update_from}..{update_to} is not inside lane "
+            f"Write window {t_from}..{t_to} is not inside lane "
             f"{lane.lane_no} validity {l_from}..{l_to}"
         )
+    if update_from < t_from or update_to > t_to:
+        raise ValueError(
+            f"Update {update_from}..{update_to} is not inside write window "
+            f"{t_from}..{t_to}"
+        )
 
-    has_before = update_from > l_from
-    has_after = update_to < l_to
+    has_before = t_from > l_from
+    has_after = t_to < l_to
 
-    # Case: update starts at lane start → keep original as update period, append after if needed
+    # Case: target starts at lane start → keep original as target, append after if needed
     if not has_before:
         if has_after:
             # Duplicate the after-segment first while the full original values are intact
-            after_from = update_to + timedelta(days=1)
+            after_from = t_to + timedelta(days=1)
             _duplicate_lane(
                 ra,
                 source=lane,
@@ -183,8 +248,8 @@ def ensure_exact_validity_lane(
                 action_label="duplicate_after",
                 actions=actions,
             )
-        _set_validity(ra, lane.row, update_from, update_to)
-        _refresh_lane_object(ra, lane, update_from, update_to)
+        _set_validity(ra, lane.row, t_from, t_to)
+        _refresh_lane_object(ra, lane, t_from, t_to)
         actions.append(
             SplitAction(
                 action="cut_original",
@@ -192,15 +257,18 @@ def ensure_exact_validity_lane(
                 source_row=lane.row,
                 result_lane_no=lane.lane_no,
                 result_row=lane.row,
-                valid_from=update_from,
-                valid_to=update_to,
-                detail="Original lane validity set to update period",
+                valid_from=t_from,
+                valid_to=t_to,
+                detail=(
+                    "Original lane validity set to write window "
+                    f"{format_ra_date(t_from)}-{format_ra_date(t_to)}"
+                ),
             )
         )
         return lane, actions
 
-    # Case: has before → cut original to before, duplicate update (+ after)
-    before_to = update_from - timedelta(days=1)
+    # Case: has before → cut original to before, duplicate target (+ after)
+    before_to = t_from - timedelta(days=1)
     original_lane_no = lane.lane_no
     original_row = lane.row
 
@@ -226,14 +294,14 @@ def ensure_exact_validity_lane(
     update_lane = _duplicate_lane(
         ra,
         source=lane,
-        valid_from=update_from,
-        valid_to=update_to,
+        valid_from=t_from,
+        valid_to=t_to,
         action_label="duplicate_update",
         actions=actions,
     )
 
     if has_after:
-        after_from = update_to + timedelta(days=1)
+        after_from = t_to + timedelta(days=1)
         _duplicate_lane(
             ra,
             source=lane,

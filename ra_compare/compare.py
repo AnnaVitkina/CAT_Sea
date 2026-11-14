@@ -134,15 +134,25 @@ def _identity_fields(ra: RateCardWorkbook, lane: RaLane) -> dict[str, str]:
 
 
 def _nums_equal(a, b) -> bool:
-    if a is None and b is None:
-        return True
-    if a is None or b is None:
-        return False
-    na, nb = to_number(a), to_number(b)
-    if na is not None and nb is not None:
-        return abs(float(na) - float(nb)) < 1e-9
-    # Dual-validity / other non-numeric rate text
-    return str(a).strip() == str(b).strip()
+    """
+    Compare rate/min values. Blank and numeric 0 are equivalent
+    (e.g. min 0.0 vs empty Flat/MIN is not a real difference).
+    """
+    def _norm(v):
+        if v is None:
+            return 0.0
+        num = to_number(v)
+        if num is not None:
+            return float(num)
+        text = str(v).strip()
+        if not text:
+            return 0.0
+        return text  # dual-validity / other non-numeric text
+
+    na, nb = _norm(a), _norm(b)
+    if isinstance(na, float) and isinstance(nb, float):
+        return abs(na - nb) < 1e-9
+    return na == nb
 
 
 def _cost_effectively_blank(cost: dict) -> bool:

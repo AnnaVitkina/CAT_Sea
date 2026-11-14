@@ -65,15 +65,26 @@ def collect_dft_boundary_dates(
     df: pd.DataFrame,
     *,
     charge_keys: set[str],
+    ra=None,
+    sheet: str = "ETSBAF",
 ) -> tuple[set[date], set[date]]:
     """
     Collect RATE_EFFECTIVE / RATE_EXPIRATION dates from update rows that have
     a non-empty rate for the given DFT charge keys (e.g. DFTBAF, DFTEU_ETS).
+
+    When `ra` is provided, only rows that remain after out-of-scope filtering
+    and that target an RA lane (existing KEY / sibling) contribute boundaries.
+    Otherwise out-of-RA keys inject spurious effectives (e.g. 28.07, 07.08)
+    and slice DFT catalog periods that no in-scope lane needs.
     """
+    from .equipment_decisions import update_row_targets_ra
+
     effectives: set[date] = set()
     expiries: set[date] = set()
     keys_u = {k.upper() for k in charge_keys}
     for _, row in df.iterrows():
+        if ra is not None and not update_row_targets_ra(ra, row, sheet):
+            continue
         vf = parse_date(row.get("RATE_EFFECTIVE_DATE__C"))
         vt = parse_date(row.get("RATE_EXPIRATION_DATE__C"))
         if vf is None or vt is None:
@@ -85,7 +96,7 @@ def collect_dft_boundary_dates(
                 continue
             if to_number(raw) is None:
                 continue
-            rule, _eq, skip = resolve_rate_column(col_s, "ETSBAF")
+            rule, _eq, skip = resolve_rate_column(col_s, sheet)
             if skip or rule is None:
                 continue
             if (rule.charge_key or "").upper() in keys_u:
@@ -103,13 +114,17 @@ def dft_periods_from_update_df(
     charge_keys: set[str],
     agreement_from: date | None = None,
     agreement_to: date | None = None,
+    ra=None,
+    sheet: str = "ETSBAF",
 ) -> list[tuple[date, date]]:
     """
-    Derive DFT cost validity periods from all matching update rows,
-    then cut each period to the RA agreement window (do not create
+    Derive DFT cost validity periods from in-scope update rows that target
+    the RA, then cut each period to the RA agreement window (do not create
     headers past agreement Valid to / before Valid from).
     """
-    effectives, expiries = collect_dft_boundary_dates(df, charge_keys=charge_keys)
+    effectives, expiries = collect_dft_boundary_dates(
+        df, charge_keys=charge_keys, ra=ra, sheet=sheet
+    )
     periods = build_contiguous_periods_from_boundaries(effectives, expiries)
     if agreement_from is None and agreement_to is None:
         return periods
@@ -423,11 +438,13 @@ def create_period_cost_column(
 
 
 def _dft_fee_columns(ra, fee_name: str) -> list[CostColumn]:
-    return [
-        c
-        for c in ra.cost_columns
-        if c.fee_name == fee_name and (c.equipment or "").upper() == "DFT"
-    ]
+    """
+    DFT weight costs: BAF/ETS Fee (DFT …) plus period-only headers some Sea FR
+    cards use (no equipment token). Same set as find_cost_columns for DFT.
+    """
+    from .cost_map import weight_period_candidates
+
+    return weight_period_candidates(ra.cost_columns, fee_name=fee_name)
 
 
 def _periods_overlap(a0: date, a1: date, b0: date, b1: date) -> bool:

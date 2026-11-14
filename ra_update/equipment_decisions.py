@@ -465,7 +465,15 @@ def ensure_weight_fee_only(
             (
                 c
                 for c in ra.cost_columns
-                if c.fee_name in {"War Risk Fee", "Base Rate", "BAF Fee", "EU ETS Fee"}
+                if c.fee_name
+                in {
+                    "War Risk Fee",
+                    "Suez Canal Charge",
+                    "Handled Goods Fee",
+                    "Base Rate",
+                    "BAF Fee",
+                    "EU ETS Fee",
+                }
             ),
             None,
         )
@@ -492,6 +500,11 @@ def ensure_weight_suez_canal_charge(ra) -> tuple[CostColumn | None, str | None]:
     return ensure_weight_fee_only(
         ra, fee_name="Suez Canal Charge", legacy_equipment="SCANAL"
     )
+
+
+def ensure_weight_handled_goods_fee(ra) -> tuple[CostColumn | None, str | None]:
+    """*DFTWM_COGH → fee-only Handled Goods Fee (Weight/chargeable kg)."""
+    return ensure_weight_fee_only(ra, fee_name="Handled Goods Fee")
 
 
 def create_cost_column_from_template(

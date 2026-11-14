@@ -22,6 +22,7 @@ from .dates import (
 from .baf_create import BafCreateStore
 from .equipment_decisions import (
     EquipmentDecisionStore,
+    ensure_weight_handled_goods_fee,
     ensure_weight_suez_canal_charge,
     ensure_weight_war_risk_fee,
 )
@@ -39,7 +40,11 @@ from .lane_add import (
     resolve_nested_validity_cuts,
 )
 from .lane_identity import sync_lane_identity_from_update
-from .lane_split import cost_update_leaks_outside_update, ensure_exact_validity_lane
+from .lane_split import (
+    compute_safe_write_validity,
+    cost_update_leaks_outside_update,
+    ensure_exact_validity_lane,
+)
 from .matching import (
     find_lanes_for_key,
     lanes_overlapping_update,
@@ -390,6 +395,24 @@ class UpdateApplier:
                 return [created], None
             return [], cerr or err or "Suez Canal Charge (weight) cost column not found"
 
+        # *DFTWM_COGH → fee-only Handled Goods Fee (Weight/chargeable kg); create if missing
+        if ra_fee_name == "Handled Goods Fee" and not eq_u and not require_period:
+            cols, err = find_cost_columns(
+                self.ra.cost_columns,
+                ra_fee_name=ra_fee_name,
+                equipment=None,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                require_period=False,
+                runtime_aliases=aliases,
+            )
+            if cols:
+                return cols, None
+            created, cerr = ensure_weight_handled_goods_fee(self.ra)
+            if created:
+                return [created], None
+            return [], cerr or err or "Handled Goods Fee (weight) cost column not found"
+
         return find_cost_columns(
             self.ra.cost_columns,
             ra_fee_name=ra_fee_name,
@@ -409,20 +432,25 @@ class UpdateApplier:
             {} if mode == "BASE" else None
         )
 
-        # DFT BAF/ETS: derive cost validities from all update effectives/expiries
-        # and create catalog columns up front (do not wait for a successful lane match).
+        # DFT BAF/ETS: derive cost validities only from in-scope update rows
+        # that target an RA lane (ignore out-of-scope / non-matching KEYs),
+        # then create catalog columns up front.
         if mode == "ETSBAF":
             self._dft_baf_periods = dft_periods_from_update_df(
                 df,
                 charge_keys={"DFTBAF"},
                 agreement_from=self.ra.agreement_valid_from,
                 agreement_to=self.ra.agreement_valid_to,
+                ra=self.ra,
+                sheet=sheet_name,
             )
             self._dft_ets_periods = dft_periods_from_update_df(
                 df,
                 charge_keys={"DFTEU_ETS"},
                 agreement_from=self.ra.agreement_valid_from,
                 agreement_to=self.ra.agreement_valid_to,
+                ra=self.ra,
+                sheet=sheet_name,
             )
             # Prefetch: reuse covering DFT columns; never invent sliced columns
             # when a potential overlapping column already exists (that is an issue).
@@ -960,12 +988,22 @@ class UpdateApplier:
 
                 if needs_split:
                     try:
+                        # ETSBAF: only cut where period costs would leak past the
+                        # update (keep pre-cost days on the same lane). BASE: exact.
+                        if mode == "ETSBAF":
+                            t_from, t_to = compute_safe_write_validity(
+                                write_lane, costs, u_from, u_to
+                            )
+                        else:
+                            t_from, t_to = u_from, u_to
                         write_lane, split_actions = ensure_exact_validity_lane(
                             self.ra,
                             key=key,
                             lane=write_lane,
                             update_from=u_from,
                             update_to=u_to,
+                            target_from=t_from,
+                            target_to=t_to,
                         )
                     except ValueError as exc:
                         self._issue(
