@@ -6,8 +6,13 @@ import argparse
 import sys
 from pathlib import Path
 
-# Allow `python run_pipeline.py` / Colab %run from any cwd
-_REPO_ROOT = Path(__file__).resolve().parent
+# Allow `python run_pipeline.py` / Colab %run / exec(...) from any cwd
+try:
+    _REPO_ROOT = Path(__file__).resolve().parent
+except NameError:
+    # exec(open(...).read()) has no __file__
+    _cand = Path("/content/CAT_Sea")
+    _REPO_ROOT = _cand if _cand.is_dir() else Path.cwd()
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
