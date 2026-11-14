@@ -8,18 +8,6 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import (
-    COL_CARRIER,
-    COL_DEST_COUNTRY,
-    COL_DEST_PORT,
-    COL_DEST_POSTAL,
-    COL_KEY,
-    COL_LANE,
-    COL_ORIGIN_COUNTRY,
-    COL_ORIGIN_PORT,
-    COL_ORIGIN_POSTAL,
-    COL_SERVICE_C,
-    COL_VALID_FROM,
-    COL_VALID_TO,
     DATA_START_ROW,
     GENERAL_INFO_SHEET,
     HEADER_COST_ROW,
@@ -28,6 +16,7 @@ from .config import (
 )
 from .cost_map import CostColumn, parse_cost_header
 from .dates import parse_date, parse_validity_period_text
+from .lane_columns import LaneColumns, resolve_lane_columns
 from .parsing import split_multi
 
 
@@ -57,6 +46,7 @@ class RateCardWorkbook:
         if RA_SHEET not in self.wb.sheetnames:
             raise ValueError(f"Sheet {RA_SHEET!r} not found in {path.name}")
         self.ws: Worksheet = self.wb[RA_SHEET]
+        self.cols: LaneColumns = resolve_lane_columns(self.ws)
         self.agreement_title, self.agreement_valid_from, self.agreement_valid_to = (
             self._load_agreement_info()
         )
@@ -66,6 +56,11 @@ class RateCardWorkbook:
         for lane in self.lanes:
             for k in lane.keys:
                 self._key_index.setdefault(k, []).append(lane)
+
+    def _cell_at(self, row: int, col: int | None) -> str:
+        if col is None:
+            return ""
+        return self._as_str(self._cell(row, col))
 
     def _load_agreement_info(self) -> tuple[str | None, date | None, date | None]:
         if GENERAL_INFO_SHEET not in self.wb.sheetnames:
@@ -164,50 +159,34 @@ class RateCardWorkbook:
     def _build_lanes(self) -> list[RaLane]:
         lanes: list[RaLane] = []
         for row in range(DATA_START_ROW, self.ws.max_row + 1):
-            key_raw = self._as_str(self._cell(row, COL_KEY))
-            lane_no = self._as_str(self._cell(row, COL_LANE))
+            key_raw = self._cell_at(row, self.cols.key)
+            lane_no = self._cell_at(row, self.cols.lane)
             if not key_raw and not lane_no:
                 continue
-            lanes.append(
-                RaLane(
-                    row=row,
-                    lane_no=lane_no,
-                    key_raw=key_raw,
-                    keys=split_multi(key_raw),
-                    carrier=self._as_str(self._cell(row, COL_CARRIER)),
-                    service_c=self._as_str(self._cell(row, COL_SERVICE_C)),
-                    valid_from=parse_date(self._cell(row, COL_VALID_FROM)),
-                    valid_to=parse_date(self._cell(row, COL_VALID_TO)),
-                    origin_port=self._as_str(self._cell(row, COL_ORIGIN_PORT)),
-                    origin_postal=self._as_str(self._cell(row, COL_ORIGIN_POSTAL)),
-                    origin_country=self._as_str(self._cell(row, COL_ORIGIN_COUNTRY)),
-                    dest_port=self._as_str(self._cell(row, COL_DEST_PORT)),
-                    dest_postal=self._as_str(self._cell(row, COL_DEST_POSTAL)),
-                    dest_country=self._as_str(self._cell(row, COL_DEST_COUNTRY)),
-                )
-            )
+            lanes.append(self._lane_from_row(row))
         return lanes
 
     def find_by_key(self, key: str) -> list[RaLane]:
         return list(self._key_index.get(str(key).strip(), []))
 
     def _lane_from_row(self, row: int) -> RaLane:
-        key_raw = self._as_str(self._cell(row, COL_KEY))
+        c = self.cols
+        key_raw = self._cell_at(row, c.key)
         return RaLane(
             row=row,
-            lane_no=self._as_str(self._cell(row, COL_LANE)),
+            lane_no=self._cell_at(row, c.lane),
             key_raw=key_raw,
             keys=split_multi(key_raw),
-            carrier=self._as_str(self._cell(row, COL_CARRIER)),
-            service_c=self._as_str(self._cell(row, COL_SERVICE_C)),
-            valid_from=parse_date(self._cell(row, COL_VALID_FROM)),
-            valid_to=parse_date(self._cell(row, COL_VALID_TO)),
-            origin_port=self._as_str(self._cell(row, COL_ORIGIN_PORT)),
-            origin_postal=self._as_str(self._cell(row, COL_ORIGIN_POSTAL)),
-            origin_country=self._as_str(self._cell(row, COL_ORIGIN_COUNTRY)),
-            dest_port=self._as_str(self._cell(row, COL_DEST_PORT)),
-            dest_postal=self._as_str(self._cell(row, COL_DEST_POSTAL)),
-            dest_country=self._as_str(self._cell(row, COL_DEST_COUNTRY)),
+            carrier=self._cell_at(row, c.carrier),
+            service_c=self._cell_at(row, c.service_c),
+            valid_from=parse_date(self._cell(row, c.valid_from)),
+            valid_to=parse_date(self._cell(row, c.valid_to)),
+            origin_port=self._cell_at(row, c.origin_port),
+            origin_postal=self._cell_at(row, c.origin_postal),
+            origin_country=self._cell_at(row, c.origin_country),
+            dest_port=self._cell_at(row, c.dest_port),
+            dest_postal=self._cell_at(row, c.dest_postal),
+            dest_country=self._cell_at(row, c.dest_country),
         )
 
     def register_lane_from_row(self, row: int) -> RaLane:

@@ -11,18 +11,6 @@ from openpyxl.styles import PatternFill
 
 from .config import (
     CHANGED_FILL_HEX,
-    COL_CARRIER,
-    COL_DEST_COUNTRY,
-    COL_DEST_PORT,
-    COL_DEST_POSTAL,
-    COL_KEY,
-    COL_ORIGIN_COUNTRY,
-    COL_ORIGIN_PORT,
-    COL_ORIGIN_POSTAL,
-    COL_SERVICE,
-    COL_SERVICE_C,
-    COL_SERVICE_SHORT,
-    COL_TRANSPOREON,
     MISMATCH_FILL_HEX,
 )
 from .parsing import split_multi
@@ -318,21 +306,26 @@ def sync_lane_identity_from_update(
     # Always store multi-values as A/B (no spaces around /)
     key_n = normalize_slash_value(key or "")
     service_c_n = normalize_slash_value(service_c or "")
+    cols = ra.cols
 
     wanted: list[tuple[str, int, str]] = [
-        ("KEY", COL_KEY, key_n),
-        ("Carrier", COL_CARRIER, carrier or ""),
-        ("SERVICE", COL_SERVICE, DEFAULT_SERVICE_TEXT),
-        ("SERVICE__C", COL_SERVICE_C, service_c_n),
-        ("Service", COL_SERVICE_SHORT, service_short),
-        ("Origin Port", COL_ORIGIN_PORT, origin_port),
-        ("Origin Postal Code", COL_ORIGIN_POSTAL, origin_postal),
-        ("ORIGIN_COUNTRY__C", COL_ORIGIN_COUNTRY, origin_country or ""),
-        ("Destination Port", COL_DEST_PORT, dest_port),
-        ("Destination Postal Code", COL_DEST_POSTAL, dest_postal),
-        ("DESTINATION_COUNTRY__C", COL_DEST_COUNTRY, dest_country or ""),
-        ("Transporeon ID", COL_TRANSPOREON, transporeon),
+        ("KEY", cols.key, key_n),
+        ("Carrier", cols.carrier, carrier or ""),
+        ("SERVICE", cols.service, DEFAULT_SERVICE_TEXT),
+        ("SERVICE__C", cols.service_c, service_c_n),
+        ("Service", cols.service_short, service_short),
+        ("Origin Port", cols.origin_port, origin_port),
     ]
+    if cols.origin_postal is not None:
+        wanted.append(("Origin Postal Code", cols.origin_postal, origin_postal))
+    wanted.append(("ORIGIN_COUNTRY__C", cols.origin_country, origin_country or ""))
+    wanted.append(("Destination Port", cols.dest_port, dest_port))
+    if cols.dest_postal is not None:
+        wanted.append(("Destination Postal Code", cols.dest_postal, dest_postal))
+    wanted.append(
+        ("DESTINATION_COUNTRY__C", cols.dest_country, dest_country or "")
+    )
+    wanted.append(("Transporeon ID", cols.transporeon, transporeon))
 
     # Port fields: clean/expand to full alias group (e.g. CNTXG/CNTSN/CNXGA).
     # KEY / SERVICE__C / postals: never replace a richer RA value; only skip re-add.
@@ -371,7 +364,7 @@ def sync_lane_identity_from_update(
                 cell.value = want
                 cell.fill = GREEN
                 results.append(IdentitySyncResult(field, col, old, want, "set"))
-                _refresh_lane_attr(lane, col, want)
+                _refresh_lane_attr(lane, field, want)
             else:
                 results.append(
                     IdentitySyncResult(field, col, old, old_s, "unchanged")
@@ -392,7 +385,7 @@ def sync_lane_identity_from_update(
                     results.append(
                         IdentitySyncResult(field, col, old, target, "expanded")
                     )
-                    _refresh_lane_attr(lane, col, target)
+                    _refresh_lane_attr(lane, field, target)
                     continue
             results.append(
                 IdentitySyncResult(field, col, old, old_s or want, "unchanged")
@@ -407,7 +400,7 @@ def sync_lane_identity_from_update(
                 results.append(
                     IdentitySyncResult(field, col, old, want, "expanded")
                 )
-                _refresh_lane_attr(lane, col, want)
+                _refresh_lane_attr(lane, field, want)
             elif field in slash_fields:
                 compact = normalize_slash_value(old)
                 if compact and compact != old_s:
@@ -416,7 +409,7 @@ def sync_lane_identity_from_update(
                     results.append(
                         IdentitySyncResult(field, col, old, compact, "expanded")
                     )
-                    _refresh_lane_attr(lane, col, compact)
+                    _refresh_lane_attr(lane, field, compact)
                 else:
                     results.append(
                         IdentitySyncResult(field, col, old, old_s or want, "unchanged")
@@ -431,7 +424,7 @@ def sync_lane_identity_from_update(
             cell.value = want
             cell.fill = GREEN
             results.append(IdentitySyncResult(field, col, old, want, "set"))
-            _refresh_lane_attr(lane, col, want)
+            _refresh_lane_attr(lane, field, want)
             continue
 
         merged = _merge_mismatch(old, want)
@@ -445,25 +438,25 @@ def sync_lane_identity_from_update(
         results.append(
             IdentitySyncResult(field, col, old, merged, "mismatch_merged")
         )
-        _refresh_lane_attr(lane, col, merged)
+        _refresh_lane_attr(lane, field, merged)
 
     return results
 
 
-def _refresh_lane_attr(lane, col: int, value: str) -> None:
+def _refresh_lane_attr(lane, field: str, value: str) -> None:
     """Keep in-memory RaLane fields in sync after identity edits."""
     mapping = {
-        COL_KEY: ("key_raw", True),
-        COL_CARRIER: ("carrier", False),
-        COL_SERVICE_C: ("service_c", False),
-        COL_ORIGIN_PORT: ("origin_port", False),
-        COL_ORIGIN_POSTAL: ("origin_postal", False),
-        COL_ORIGIN_COUNTRY: ("origin_country", False),
-        COL_DEST_PORT: ("dest_port", False),
-        COL_DEST_POSTAL: ("dest_postal", False),
-        COL_DEST_COUNTRY: ("dest_country", False),
+        "KEY": ("key_raw", True),
+        "Carrier": ("carrier", False),
+        "SERVICE__C": ("service_c", False),
+        "Origin Port": ("origin_port", False),
+        "Origin Postal Code": ("origin_postal", False),
+        "ORIGIN_COUNTRY__C": ("origin_country", False),
+        "Destination Port": ("dest_port", False),
+        "Destination Postal Code": ("dest_postal", False),
+        "DESTINATION_COUNTRY__C": ("dest_country", False),
     }
-    spec = mapping.get(col)
+    spec = mapping.get(field)
     if not spec:
         return
     attr, is_key = spec

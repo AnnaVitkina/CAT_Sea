@@ -42,6 +42,7 @@ HEADER_COST_ROW = 3  # cost names (e.g. BAF Fee (22G0 15.09.2026-14.10.2026))
 HEADER_FIELD_ROW = 7  # Lane #, KEY, Carrier, p/unit, ...
 DATA_START_ROW = 8
 
+# Classic Sea layout defaults (Sea FR omits postal cols — resolve via lane_columns)
 COL_LANE = 1
 COL_TRANSPOREON = 2
 COL_KEY = 3

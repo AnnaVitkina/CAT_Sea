@@ -8,12 +8,7 @@ from datetime import date, timedelta
 
 from openpyxl.styles import PatternFill
 
-from .config import (
-    CHANGED_FILL_HEX,
-    COL_LANE,
-    COL_VALID_FROM,
-    COL_VALID_TO,
-)
+from .config import CHANGED_FILL_HEX
 from .cost_map import CostColumn
 from .dates import format_ra_date, periods_equal
 from .ra_model import RaLane, RateCardWorkbook
@@ -92,8 +87,8 @@ def _copy_row(ws, source_row: int, target_row: int) -> None:
 
 def _set_validity(ra: RateCardWorkbook, row: int, valid_from: date, valid_to: date) -> None:
     ws = ra.ws
-    from_cell = ws.cell(row, COL_VALID_FROM)
-    to_cell = ws.cell(row, COL_VALID_TO)
+    from_cell = ws.cell(row, ra.cols.valid_from)
+    to_cell = ws.cell(row, ra.cols.valid_to)
     from_cell.value = format_ra_date(valid_from)
     to_cell.value = format_ra_date(valid_to)
     from_cell.fill = GREEN
@@ -101,7 +96,7 @@ def _set_validity(ra: RateCardWorkbook, row: int, valid_from: date, valid_to: da
 
 
 def _set_lane_no(ra: RateCardWorkbook, row: int, lane_no: str) -> None:
-    cell = ra.ws.cell(row, COL_LANE)
+    cell = ra.ws.cell(row, ra.cols.lane)
     cell.value = lane_no
     cell.fill = GREEN
 

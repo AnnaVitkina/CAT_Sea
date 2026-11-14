@@ -10,21 +10,6 @@ from openpyxl.styles import PatternFill
 
 from .config import (
     CHANGED_FILL_HEX,
-    COL_CARRIER,
-    COL_DEST_COUNTRY,
-    COL_DEST_PORT,
-    COL_DEST_POSTAL,
-    COL_KEY,
-    COL_LANE,
-    COL_ORIGIN_COUNTRY,
-    COL_ORIGIN_PORT,
-    COL_ORIGIN_POSTAL,
-    COL_SERVICE,
-    COL_SERVICE_C,
-    COL_SERVICE_SHORT,
-    COL_TRANSPOREON,
-    COL_VALID_FROM,
-    COL_VALID_TO,
     SEA_FR_DEST_COUNTRIES,
     SEA_LANE_COUNTRIES,
 )
@@ -162,20 +147,23 @@ def create_lane_from_update(
     )
     lane_no = str(_next_lane_number(ra))
 
-    _set_green(ws, new_row, COL_LANE, lane_no)
-    _set_green(ws, new_row, COL_TRANSPOREON, transporeon)
-    _set_green(ws, new_row, COL_KEY, key_n)
-    _set_green(ws, new_row, COL_CARRIER, carrier)
-    _set_green(ws, new_row, COL_SERVICE, DEFAULT_SERVICE_TEXT)
-    _set_green(ws, new_row, COL_SERVICE_C, service_c_n)
-    _set_green(ws, new_row, COL_SERVICE_SHORT, service_short)
+    cols = ra.cols
+    _set_green(ws, new_row, cols.lane, lane_no)
+    _set_green(ws, new_row, cols.transporeon, transporeon)
+    _set_green(ws, new_row, cols.key, key_n)
+    _set_green(ws, new_row, cols.carrier, carrier)
+    _set_green(ws, new_row, cols.service, DEFAULT_SERVICE_TEXT)
+    _set_green(ws, new_row, cols.service_c, service_c_n)
+    _set_green(ws, new_row, cols.service_short, service_short)
     _set_validity(ra, new_row, valid_from, valid_to)
-    _set_green(ws, new_row, COL_ORIGIN_PORT, origin_port)
-    _set_green(ws, new_row, COL_ORIGIN_POSTAL, origin_postal)
-    _set_green(ws, new_row, COL_ORIGIN_COUNTRY, origin_country)
-    _set_green(ws, new_row, COL_DEST_PORT, dest_port)
-    _set_green(ws, new_row, COL_DEST_POSTAL, dest_postal)
-    _set_green(ws, new_row, COL_DEST_COUNTRY, dest_country)
+    _set_green(ws, new_row, cols.origin_port, origin_port)
+    if cols.origin_postal is not None:
+        _set_green(ws, new_row, cols.origin_postal, origin_postal)
+    _set_green(ws, new_row, cols.origin_country, origin_country)
+    _set_green(ws, new_row, cols.dest_port, dest_port)
+    if cols.dest_postal is not None:
+        _set_green(ws, new_row, cols.dest_postal, dest_postal)
+    _set_green(ws, new_row, cols.dest_country, dest_country)
 
     lane = ra.register_lane_from_row(new_row)
     action = AddAction(
