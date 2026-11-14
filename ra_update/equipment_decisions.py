@@ -5,7 +5,8 @@ Aliases are same Rate-by only (e.g. 20G0/22G0/22SOC = Container/20FT).
 Solo types (e.g. 42P1 = Container/40FR alone) have no alias peer and should be created;
 a layout donor (e.g. 42G0) is only used to clone column structure, not as an alias.
 
-For each update equipment code that has rates but no matching RA cost header:
+For each update equipment code that has rates but no matching RA cost header,
+and only when in-scope update rows target an RA lane (or BASE-addable KEY):
   1) Prefer CREATE when no same-type alias exists; clone layout from a size donor
   2) Prefer ALIAS when a same Rate-by peer is already on the RA
   3) Apply that decision for the rest of the run
@@ -28,6 +29,7 @@ from .charge_rules import (
     equipment_rate_by,
     preferred_alias_template,
     resolve_rate_column,
+    service_out_of_scope_reason,
 )
 from .config import (
     CHANGED_FILL_HEX,
@@ -38,6 +40,8 @@ from .config import (
 )
 from .cost_map import CostColumn, find_cost_columns, parse_cost_header
 from .dates import format_ra_date
+from .lane_add import is_missing_lane_addable
+from .matching import find_lanes_for_key
 from .parsing import to_number
 
 GREEN = PatternFill(start_color=CHANGED_FILL_HEX, end_color=CHANGED_FILL_HEX, fill_type="solid")
@@ -198,17 +202,58 @@ def save_decisions_file(path: Path, store: EquipmentDecisionStore) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _row_str(row: pd.Series, col: str) -> str:
+    v = row.get(col)
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    return str(v).strip()
+
+
+def update_row_targets_ra(ra, row: pd.Series, sheet: str) -> bool:
+    """
+    True when an update row can drive RA cost writes this run:
+      - SERVICE__C not out of scope
+      - KEY present on RA (incl. BU/slash sibling), or BASE lane auto-addable
+    """
+    if service_out_of_scope_reason(_row_str(row, "SERVICE__C")):
+        return False
+    key = _row_str(row, "KEY")
+    if not key:
+        return False
+    lanes, _ = find_lanes_for_key(ra, key)
+    if lanes:
+        return True
+    if str(sheet).upper() != "BASE":
+        return False
+    addable, _ = is_missing_lane_addable(
+        ra.agreement_title,
+        _row_str(row, "ORIGIN_COUNTRY__C"),
+        _row_str(row, "DESTINATION_COUNTRY__C"),
+    )
+    return addable
+
+
 def collect_missing_equipment_fees(
     ra,
     update_path: Path,
 ) -> dict[str, set[str]]:
-    """equipment -> set of ra_fee_name that are missing on the Rate Card."""
+    """
+    equipment -> set of ra_fee_name missing on the Rate Card.
+
+    Only rates on update rows that remain after out-of-scope filtering and that
+    target an RA lane (existing or BASE-addable) are considered — so we do not
+    prompt to create columns never used by this run.
+    """
     missing: dict[str, set[str]] = {}
-    present_eq = {c.equipment for c in ra.cost_columns if c.equipment}
+    ignored_only: dict[str, set[str]] = {}
 
     for sheet in UPDATE_SHEETS:
-        df = pd.read_excel(update_path, sheet_name=sheet)
+        try:
+            df = pd.read_excel(update_path, sheet_name=sheet)
+        except ValueError:
+            continue
         for _, row in df.iterrows():
+            applies = update_row_targets_ra(ra, row, sheet)
             for col, raw in row.items():
                 col_s = str(col)
                 if not col_s.endswith("_RATE"):
@@ -224,7 +269,7 @@ def collect_missing_equipment_fees(
                     continue
                 eq = equipment.upper()
                 # Exact equipment already on RA for this fee?
-                cols, err = find_cost_columns(
+                cols, _err = find_cost_columns(
                     ra.cost_columns,
                     ra_fee_name=rule.ra_fee_name,
                     equipment=eq,
@@ -234,14 +279,24 @@ def collect_missing_equipment_fees(
                 )
                 if cols:
                     continue
-                # Only treat as missing-equipment when no exact header exists
                 if any(
                     c.fee_name == rule.ra_fee_name and c.equipment == eq
                     for c in ra.cost_columns
                 ):
                     continue
-                # Skip if equipment itself exists for some fee (partial) — still list missing fees
-                missing.setdefault(eq, set()).add(rule.ra_fee_name)
+                if applies:
+                    missing.setdefault(eq, set()).add(rule.ra_fee_name)
+                else:
+                    ignored_only.setdefault(eq, set()).add(rule.ra_fee_name)
+
+    # Equipment only seen on out-of-scope / non-RA rows — do not prompt
+    unused = sorted(eq for eq in ignored_only if eq not in missing)
+    if unused:
+        print(
+            "  Skipping missing-equipment prompt for "
+            f"{', '.join(unused)} "
+            "(only on out-of-scope or non-matching KEY rows)."
+        )
     return missing
 
 

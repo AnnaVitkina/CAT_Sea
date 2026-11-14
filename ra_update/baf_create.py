@@ -12,6 +12,7 @@ import pandas as pd
 from .charge_rules import resolve_rate_column
 from .cost_map import period_fee_header
 from .dates import format_ra_date, parse_date
+from .equipment_decisions import update_row_targets_ra
 from .parsing import to_number
 from .period_fees import iter_baf_months_covering
 
@@ -93,7 +94,9 @@ def collect_missing_baf_months(
 
     df = pd.read_excel(update_path, sheet_name="ETSBAF")
     # DFT BAF catalog is created automatically (not via interactive 15→14 cutoff).
+    ignored_eq: set[str] = set()
     for _, row in df.iterrows():
+        applies = update_row_targets_ra(ra, row, "ETSBAF")
         vf = parse_date(row.get("RATE_EFFECTIVE_DATE__C"))
         vt = parse_date(row.get("RATE_EXPIRATION_DATE__C"))
         if vf is None or vt is None:
@@ -113,12 +116,22 @@ def collect_missing_baf_months(
             eq = aliases.get(eq, eq)
             if eq == "DFT":
                 continue  # DFT periods created up front in process_sheet
+            if not applies:
+                ignored_eq.add(eq)
+                continue
             for m_from, m_to in iter_baf_months_covering(vf, vt):
                 headers = [period_fee_header("BAF Fee", eq, m_from, m_to)]
                 if any(c.header in headers for c in ra.cost_columns):
                     continue
                 needed.setdefault(eq, set()).add((m_from, m_to))
 
+    unused = sorted(eq for eq in ignored_eq if eq not in needed)
+    if unused:
+        print(
+            "  Skipping BAF create prompt for "
+            f"{', '.join(unused)} "
+            "(only on out-of-scope or non-matching KEY rows)."
+        )
     return {eq: sorted(months) for eq, months in sorted(needed.items())}
 
 
