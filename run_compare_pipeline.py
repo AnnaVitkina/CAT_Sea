@@ -26,9 +26,8 @@ from ra_update.output_names import stem_from_baseline_and_candidate
 
 
 def _default_interactive() -> bool:
-    if Path("/content").exists():
-        return False
-    return sys.stdin.isatty()
+    """Default interactive (Colab input() works). Use --non-interactive to skip."""
+    return True
 
 
 def _newest_updated_ra(folder: Path) -> str | None:
@@ -92,12 +91,12 @@ def main() -> None:
     parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Use preferred baseline name and newest *_updated_* without prompting (default on Colab)",
+        help="Use preferred baseline name and newest *_updated_* without prompting",
     )
     parser.add_argument(
         "--interactive",
         action="store_true",
-        help="Force interactive file prompts even on Colab",
+        help="Force interactive file prompts (default)",
     )
     # parse_known_args: Jupyter/Colab injects "-f kernel-….json" into sys.argv
     args, _unknown = parser.parse_known_args()

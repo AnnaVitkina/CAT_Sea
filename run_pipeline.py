@@ -29,10 +29,11 @@ from ra_update.pipeline import run_pipeline
 
 
 def _default_interactive() -> bool:
-    """Colab / no-TTY → non-interactive (use preferred or sole file)."""
-    if Path("/content").exists():
-        return False
-    return sys.stdin.isatty()
+    """
+    Default to interactive so the user can pick RA/update when several exist.
+    Colab supports input() in cells. Pass --non-interactive to skip prompts.
+    """
+    return True
 
 
 def main() -> None:
@@ -70,14 +71,13 @@ def main() -> None:
         action="store_true",
         help=(
             "Do not prompt for files, missing equipment, or BAF create-until; "
-            "uses preferred filenames or the sole file in each folder "
-            "(default on Colab / non-TTY)"
+            "uses preferred filenames or the sole file in each folder"
         ),
     )
     parser.add_argument(
         "--interactive",
         action="store_true",
-        help="Force interactive prompts even on Colab",
+        help="Force interactive prompts (default)",
     )
     # parse_known_args: Jupyter/Colab injects "-f kernel-….json" into sys.argv
     args, _unknown = parser.parse_known_args()
