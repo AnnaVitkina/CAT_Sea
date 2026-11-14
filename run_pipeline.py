@@ -79,7 +79,8 @@ def main() -> None:
         action="store_true",
         help="Force interactive prompts even on Colab",
     )
-    args = parser.parse_args()
+    # parse_known_args: Jupyter/Colab injects "-f kernel-….json" into sys.argv
+    args, _unknown = parser.parse_known_args()
 
     ensure_input_folders(RA_INPUT_DIR, UPDATE_INPUT_DIR, OUTPUT_DIR)
     if args.interactive:
