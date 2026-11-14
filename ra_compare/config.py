@@ -6,7 +6,7 @@ from ra_update.config import OUTPUT_DIR, RA_FILENAME, RA_INPUT_DIR
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Same Drive folders as ra_update (hardcoded in ra_update.config)
+# Same folders as ra_update.config (Colab Drive if present, else local input/output)
 # Baseline: input/rate agreement/
 # Candidate: output/ (*_updated_*.xlsx)
 BASELINE_DIR = RA_INPUT_DIR

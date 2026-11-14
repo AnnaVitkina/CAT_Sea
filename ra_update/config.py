@@ -1,16 +1,30 @@
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Hardcoded Colab / Google Drive CAT_Sea folders
-CAT_SEA_ROOT = Path(
+# Colab Google Drive CAT_Sea (only used when that path exists — not on Windows)
+_COLAB_CAT_SEA = (
     "/content/drive/Shareddrives/FA Ops Europe: Rate Maintenance Team "
     "/Documents/AI Adoption RMT/RMT_CAT/CAT_Sea"
 )
-INPUT_DIR = CAT_SEA_ROOT / "input"
-OUTPUT_DIR = CAT_SEA_ROOT / "output"
 
-# Separate input folders under Drive input/
+
+def _resolve_io_dirs() -> tuple[Path, Path, Path | None]:
+    """
+    Prefer Colab Drive folders when available; otherwise local repo input/output.
+    Never touch the Drive path on Windows (colon in share name → WinError 123).
+    """
+    if os.name != "nt":
+        colab_root = Path(_COLAB_CAT_SEA)
+        if colab_root.is_dir():
+            return colab_root / "input", colab_root / "output", colab_root
+    return ROOT / "input", ROOT / "output", None
+
+
+INPUT_DIR, OUTPUT_DIR, CAT_SEA_ROOT = _resolve_io_dirs()
+
+# Separate input folders under input/
 RA_INPUT_DIR = INPUT_DIR / "rate agreement"
 UPDATE_INPUT_DIR = INPUT_DIR / "update"
 
