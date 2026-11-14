@@ -50,24 +50,32 @@ class BafCreateStore:
 
 
 def _tty_prompt(text: str, default: str = "") -> str:
+    """Use input() so Colab / Jupyter work (stdin often isatty()=False)."""
     import sys
 
     suffix = f" [{default}]" if default else ""
     prompt = f"{text}{suffix}: "
-    print(prompt, end="", flush=True)
     try:
-        if not sys.stdin.isatty():
-            raise EOFError("stdin is not a terminal")
-        raw = sys.stdin.readline()
-        if raw == "":
-            raise EOFError("empty stdin")
-        raw = raw.strip()
+        raw = input(prompt).strip()
     except EOFError:
         raise SystemExit(
-            "Interactive BAF create prompts need a real terminal. "
-            "Run `python run_pipeline.py` in the Cursor Terminal panel "
-            "(or use --non-interactive to create all missing BAF months)."
+            "Interactive BAF create prompts need usable input(). "
+            "In Colab use `%run run_pipeline.py` (not !python), "
+            "or pass --non-interactive to create all missing BAF months."
         ) from None
+    except Exception:
+        print(prompt, end="", flush=True)
+        try:
+            raw = sys.stdin.readline()
+            if raw == "":
+                raise EOFError("empty stdin")
+            raw = raw.strip()
+        except EOFError:
+            raise SystemExit(
+                "Interactive BAF create prompts need usable input(). "
+                "In Colab use `%run run_pipeline.py` (not !python), "
+                "or pass --non-interactive to create all missing BAF months."
+            ) from None
     return raw if raw else default
 
 

@@ -20,7 +20,11 @@ from .dates import (
     uncovered_period_segments,
 )
 from .baf_create import BafCreateStore
-from .equipment_decisions import EquipmentDecisionStore, ensure_weight_war_risk_fee
+from .equipment_decisions import (
+    EquipmentDecisionStore,
+    ensure_weight_suez_canal_charge,
+    ensure_weight_war_risk_fee,
+)
 from .period_fees import (
     dft_periods_from_update_df,
     ensure_baf_cost_columns,
@@ -358,6 +362,33 @@ class UpdateApplier:
             if created:
                 return [created], None
             return [], cerr or err or "War Risk Fee (weight) cost column not found"
+
+        # *DFTWM_SCANAL → fee-only Suez Canal Charge (Weight/chargeable kg); create if missing
+        if ra_fee_name == "Suez Canal Charge" and not eq_u and not require_period:
+            cols, err = find_cost_columns(
+                self.ra.cost_columns,
+                ra_fee_name=ra_fee_name,
+                equipment=None,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                require_period=False,
+                runtime_aliases=aliases,
+            )
+            if cols:
+                return cols, None
+            # Legacy RA header "Suez Canal Charge (SCANAL)"
+            legacy = [
+                c
+                for c in self.ra.cost_columns
+                if c.fee_name == "Suez Canal Charge"
+                and (c.equipment or "").upper() == "SCANAL"
+            ]
+            if legacy:
+                return legacy, None
+            created, cerr = ensure_weight_suez_canal_charge(self.ra)
+            if created:
+                return [created], None
+            return [], cerr or err or "Suez Canal Charge (weight) cost column not found"
 
         return find_cost_columns(
             self.ra.cost_columns,

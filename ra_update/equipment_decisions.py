@@ -113,26 +113,36 @@ def rate_by_for_new_equipment(new_eq: str, template_rate_by: str | None) -> str:
 
 
 def _prompt(text: str, default: str = "") -> str:
-    """Ask in the current terminal (stdout/stdin). Requires an interactive TTY."""
+    """
+    Ask via input() so Colab / Jupyter cells work (stdin often isatty()=False).
+    Falls back to readline on a real TTY if input() is unavailable.
+    """
     import sys
 
     suffix = f" [{default}]" if default else ""
     prompt = f"{text}{suffix}: "
-    # Ensure the question is visible before blocking on input (Cursor terminal).
-    print(prompt, end="", flush=True)
     try:
-        if not sys.stdin.isatty():
-            raise EOFError("stdin is not a terminal")
-        raw = sys.stdin.readline()
-        if raw == "":
-            raise EOFError("empty stdin")
-        raw = raw.strip()
+        raw = input(prompt).strip()
     except EOFError:
         raise SystemExit(
-            "Interactive equipment prompts need a real terminal. "
-            "Run `python run_pipeline.py` in the Cursor Terminal panel "
-            "(or use --non-interactive with input/equipment_decisions.json)."
+            "Interactive equipment prompts need usable input(). "
+            "In Colab use `%run run_pipeline.py` (not !python), "
+            "or pass --non-interactive with input/equipment_decisions.json."
         ) from None
+    except Exception:
+        # Non-notebook fallback
+        print(prompt, end="", flush=True)
+        try:
+            raw = sys.stdin.readline()
+            if raw == "":
+                raise EOFError("empty stdin")
+            raw = raw.strip()
+        except EOFError:
+            raise SystemExit(
+                "Interactive equipment prompts need usable input(). "
+                "In Colab use `%run run_pipeline.py` (not !python), "
+                "or pass --non-interactive with input/equipment_decisions.json."
+            ) from None
     return raw if raw else default
 
 
@@ -352,43 +362,73 @@ def create_fee_only_cost_column(
     return new_cost
 
 
-def ensure_weight_war_risk_fee(ra) -> tuple[CostColumn | None, str | None]:
+def ensure_weight_fee_only(
+    ra,
+    *,
+    fee_name: str,
+    legacy_equipment: str | None = None,
+) -> tuple[CostColumn | None, str | None]:
     """
-    Ensure fee-only War Risk Fee (Rate by: Weight/chargeable kg) exists.
-    Used for *DFTWM_WAR_RISK — not container War Risk Fee (22G0)/….
+    Ensure a fee-only cost column exists with Rate by: Weight/chargeable kg
+    (header = fee name only, no equipment token).
+
+    Also accepts a legacy header like 'Suez Canal Charge (SCANAL)' if present.
     """
     from .charge_rules import DFT_WEIGHT_RATE_BY
 
     existing = [
         c
         for c in ra.cost_columns
-        if c.fee_name == "War Risk Fee" and c.equipment is None
+        if c.fee_name == fee_name and c.equipment is None
     ]
     if not existing:
-        existing = [c for c in ra.cost_columns if c.header == "War Risk Fee"]
+        existing = [c for c in ra.cost_columns if c.header == fee_name]
+    if not existing and legacy_equipment:
+        leg = legacy_equipment.upper()
+        existing = [
+            c
+            for c in ra.cost_columns
+            if c.fee_name == fee_name and (c.equipment or "").upper() == leg
+        ]
     if existing:
         return existing[0], None
 
     template = next(
-        (c for c in ra.cost_columns if c.fee_name == "War Risk Fee"),
+        (c for c in ra.cost_columns if c.fee_name == fee_name),
         None,
     )
     if template is None:
         template = next(
-            (c for c in ra.cost_columns if c.fee_name in {"Base Rate", "BAF Fee", "EU ETS Fee"}),
+            (
+                c
+                for c in ra.cost_columns
+                if c.fee_name in {"War Risk Fee", "Base Rate", "BAF Fee", "EU ETS Fee"}
+            ),
             None,
         )
     if template is None:
-        return None, "No template column available to create weight War Risk Fee"
+        return None, f"No template column available to create weight {fee_name}"
 
     created = create_fee_only_cost_column(
         ra,
-        fee_name="War Risk Fee",
+        fee_name=fee_name,
         template=template,
         rate_by=DFT_WEIGHT_RATE_BY,
     )
     print(f"  Created {created.header!r} (Rate by: {DFT_WEIGHT_RATE_BY})")
     return created, None
+
+
+def ensure_weight_war_risk_fee(ra) -> tuple[CostColumn | None, str | None]:
+    """*DFTWM_WAR_RISK → fee-only War Risk Fee (Weight/chargeable kg)."""
+    return ensure_weight_fee_only(ra, fee_name="War Risk Fee")
+
+
+def ensure_weight_suez_canal_charge(ra) -> tuple[CostColumn | None, str | None]:
+    """*DFTWM_SCANAL → fee-only Suez Canal Charge (Weight/chargeable kg)."""
+    return ensure_weight_fee_only(
+        ra, fee_name="Suez Canal Charge", legacy_equipment="SCANAL"
+    )
 
 
 def create_cost_column_from_template(
