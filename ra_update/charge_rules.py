@@ -241,10 +241,10 @@ CNTR_RATE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Update/RA equipment codes that share one container type (same RA cost family).
-# Used as *suggestions* when costs are missing; auto-apply only after user confirms
-# an alias (see equipment_decisions.EquipmentDecisionStore).
-# Order within each group is the preference when several codes exist on the Rate Card.
+# Update/RA equipment codes that share the same Rate-by container type.
+# Alias only within a group (e.g. 20G0/22G0/22SOC = Container/20FT).
+# Solo groups (e.g. 42P1 = Container/40FR) have no alias — must be created.
+# Order within each group is preference when several codes exist on the Rate Card.
 EQUIPMENT_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ("20G0", "22G0", "22SOC"),  # Container/20FT
     ("22P1",),  # Container/20FR
@@ -270,6 +270,40 @@ EQUIPMENT_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ("45SOC",),  # Container/40HCSO
 )
 
+# Canonical Rate-by label when creating a new equipment cost column
+EQUIPMENT_RATE_BY: dict[str, str] = {
+    "20G0": "Container/20FT",
+    "22G0": "Container/20FT",
+    "22SOC": "Container/20FT",
+    "22P1": "Container/20FR",
+    "22P1B": "Container/20FROHOW",
+    "22P1H": "Container/20FROH",
+    "22P1W": "Container/20FROW",
+    "22RT": "Container/20RE",
+    "22UT": "Container/20OT",
+    "22U0": "Container/20OT",
+    "22UTH": "Container/20OTOH",
+    "25G0": "Container/20HC",
+    "42G0": "Container/40FT",
+    "42P1S": "Container/40FT",
+    "42SOC": "Container/40FT",
+    "42P1": "Container/40FR",
+    "42P1B": "Container/40FROHOW",
+    "42P1H": "Container/40FROH",
+    "42P1W": "Container/40FTOW",
+    "42RT": "Container/40RE",
+    "42UT": "Container/40OT",
+    "42U0": "Container/40OT",
+    "42UTH": "Container/40OTOH",
+    "45G0": "Container/40HC",
+    "L2G0": "Container/40HC",
+    "45RT": "Container/40HCRE",
+    "45UT": "Container/40HCOT",
+    "45U0": "Container/40HCOT",
+    "45UTH": "Container/40HCOTOH",
+    "45SOC": "Container/40HCSO",
+}
+
 _EQUIPMENT_TO_GROUP: dict[str, tuple[str, ...]] = {
     code: group for group in EQUIPMENT_ALIAS_GROUPS for code in group
 }
@@ -288,17 +322,28 @@ def preferred_alias_template(
     present_equipments: set[str],
 ) -> str | None:
     """
-    Suggest an existing RA equipment code to alias onto / clone from.
-    Prefers the first group member that is present and different from `equipment`.
+    Suggest an existing RA equipment in the *same Rate-by alias group*.
+    Never cross groups (42P1 must not suggest 22G0).
     """
     if not equipment:
         return None
     eq = str(equipment).strip().upper()
     present = {str(p).strip().upper() for p in present_equipments if p}
-    for code in equipment_alias_group(eq):
+    group = equipment_alias_group(eq)
+    # Solo group → no alias peer
+    if len(group) <= 1:
+        return None
+    for code in group:
         if code != eq and code in present:
             return code
     return None
+
+
+def equipment_rate_by(equipment: str | None) -> str | None:
+    """Canonical Rate-by for an equipment code, if known."""
+    if not equipment:
+        return None
+    return EQUIPMENT_RATE_BY.get(str(equipment).strip().upper())
 
 
 def same_equipment_alias_group(a: str | None, b: str | None) -> bool:

@@ -1,9 +1,13 @@
 """
 Resolve missing equipment cost columns interactively (or via a decisions file).
 
+Aliases are same Rate-by only (e.g. 20G0/22G0/22SOC = Container/20FT).
+Solo types (e.g. 42P1 = Container/40FR alone) have no alias peer and should be created;
+a layout donor (e.g. 42G0) is only used to clone column structure, not as an alias.
+
 For each update equipment code that has rates but no matching RA cost header:
-  1) Ask whether to CREATE a new container-type cost column (cloned from alias template)
-  2) If no — confirm which existing equipment to ALIAS onto (default from alias groups)
+  1) Prefer CREATE when no same-type alias exists; clone layout from a size donor
+  2) Prefer ALIAS when a same Rate-by peer is already on the RA
   3) Apply that decision for the rest of the run
 """
 
@@ -19,7 +23,9 @@ import pandas as pd
 from openpyxl.styles import PatternFill
 
 from .charge_rules import (
+    EQUIPMENT_RATE_BY,
     equipment_alias_group,
+    equipment_rate_by,
     preferred_alias_template,
     resolve_rate_column,
 )
@@ -35,14 +41,6 @@ from .dates import format_ra_date
 from .parsing import to_number
 
 GREEN = PatternFill(start_color=CHANGED_FILL_HEX, end_color=CHANGED_FILL_HEX, fill_type="solid")
-
-# Rate-by label when creating a brand-new equipment cost (not when aliasing).
-NEW_EQUIPMENT_RATE_BY: dict[str, str] = {
-    "22SOC": "Container/20SOC",
-    "42SOC": "Container/40SOC",
-    "45SOC": "Container/40HCSO",
-}
-
 
 @dataclass
 class EquipmentDecision:
@@ -77,37 +75,47 @@ class EquipmentDecisionStore:
         return self.resolve_equipment(a_u) == self.resolve_equipment(b_u)
 
 
-def suggest_template(equipment: str, present: set[str]) -> str | None:
-    """Preferred existing RA equipment to clone from / alias onto."""
-    hit = preferred_alias_template(equipment, present)
-    if hit:
-        return hit
+def suggest_alias_equipment(equipment: str, present: set[str]) -> str | None:
+    """Same Rate-by group member already on the RA (alias peer), else None."""
+    return preferred_alias_template(equipment, present)
+
+
+def suggest_layout_template(equipment: str, present: set[str]) -> str | None:
+    """
+    Equipment to clone *column layout* from when creating a new code.
+    Prefers same-group alias; else a common size donor (not treated as alias).
+    """
+    alias = preferred_alias_template(equipment, present)
+    if alias:
+        return alias
     eq = (equipment or "").strip().upper()
-    # e.g. 45SOC is its own group but OTHC may be missing — clone from 45G0
-    if eq.endswith("SOC"):
-        stem = eq[: -len("SOC")]  # 22 / 42 / 45
-        for cand in (f"{stem}G0", f"{stem}P1", f"{stem}UT"):
-            if cand in present:
+    present_u = {str(p).strip().upper() for p in present if p}
+    # Prefer same size family for layout only (40xx → 42G0/45G0, 20/22 → 22G0)
+    if eq.startswith("45") or eq.startswith("L2"):
+        for cand in ("45G0", "42G0", "22G0"):
+            if cand in present_u:
                 return cand
-    return None
+    if eq.startswith("42"):
+        for cand in ("42G0", "45G0", "22G0"):
+            if cand in present_u:
+                return cand
+    if eq.startswith(("20", "22", "25")):
+        for cand in ("22G0", "20G0", "45G0"):
+            if cand in present_u:
+                return cand
+    return sorted(present_u)[0] if present_u else None
 
 
 def rate_by_for_new_equipment(new_eq: str, template_rate_by: str | None) -> str:
-    if new_eq in NEW_EQUIPMENT_RATE_BY:
-        return NEW_EQUIPMENT_RATE_BY[new_eq]
+    known = equipment_rate_by(new_eq) or EQUIPMENT_RATE_BY.get(
+        str(new_eq).strip().upper()
+    )
+    if known:
+        return known
     if template_rate_by:
         text = template_rate_by.strip()
-        # Never copy Weight/chargeable kg onto container equipment (DFT-only)
         if "weight" in text.lower():
             return f"Container/{new_eq}"
-        # Heuristic: Container/20FT + SOC eq -> Container/20SOC
-        if new_eq.endswith("SOC") and text.startswith("Container/"):
-            body = text[len("Container/") :]
-            if body.endswith("FT"):
-                return f"Container/{body[:-2]}SOC"
-            if body.endswith("HC"):
-                return f"Container/{body}SO"
-            return f"Container/{body}SOC"
         return text
     return f"Container/{new_eq}"
 
@@ -559,47 +567,76 @@ def resolve_missing_equipment_interactive(
 
     for eq in sorted(missing):
         fees = sorted(missing[eq])
-        template_eq = suggest_template(eq, present) or (sorted(present)[0] if present else None)
         group = equipment_alias_group(eq)
+        rate_by = equipment_rate_by(eq)
+        alias_peer = suggest_alias_equipment(eq, present)
+        layout_donor = suggest_layout_template(eq, present)
 
         preload = preloaded.get(eq)
         if preload and not interactive:
             action = str(preload.get("action", "")).strip().lower()
             target = preload.get("target")
-            target = str(target).strip().upper() if target else template_eq
+            target = str(target).strip().upper() if target else (
+                alias_peer or layout_donor
+            )
             print(f"  Using saved decision for {eq}: {action} -> {target}")
         elif interactive:
             print()
             print(f"Equipment {eq} has update rates but no RA cost column(s).")
             print(f"  Missing fees: {', '.join(fees)}")
-            if template_eq:
+            if rate_by:
+                print(f"  Rate by: {rate_by}")
+            print(f"  Alias group (same Rate by): {group}")
+            if alias_peer:
                 print(
-                    f"  Suggested template/alias from group {group}: {template_eq}"
+                    f"  Same-type alias already on RA: {alias_peer} "
+                    f"(you may alias instead of create)"
                 )
+                default_ans = "n"
+            else:
+                print(
+                    "  No same-type alias on RA — should create this equipment."
+                )
+                if layout_donor:
+                    print(
+                        f"  Layout donor for cloning column structure: {layout_donor} "
+                        f"(not an alias)"
+                    )
+                default_ans = "y"
             ans = ask(
-                f"Create new container-type cost columns for {eq}? (y=create / n=alias)",
-                "n",
+                f"Create new cost columns for {eq}? (y=create / n=alias)",
+                default_ans,
             ).lower()
             if ans.startswith("y"):
                 action = "create"
-                target = template_eq
+                target = layout_donor
             else:
                 action = "alias"
                 target = ask(
                     f"Alias {eq} onto which existing equipment?",
-                    template_eq or "",
+                    alias_peer or layout_donor or "",
                 ).upper()
         else:
-            print(f"  Skipping {eq} (non-interactive, no decisions file entry).")
-            store.skipped.add(eq)
-            store.decisions.append(
-                EquipmentDecision(eq, "skip", note="non-interactive, no preload")
-            )
-            continue
+            # Non-interactive, no preload: create solo types; alias when peer exists
+            if alias_peer:
+                action, target = "alias", alias_peer
+                print(f"  Auto-alias {eq} -> {alias_peer} (same Rate-by group)")
+            elif layout_donor:
+                action, target = "create", layout_donor
+                print(
+                    f"  Auto-create {eq} (no same-type alias; layout from {layout_donor})"
+                )
+            else:
+                print(f"  Skipping {eq} (non-interactive, no layout donor).")
+                store.skipped.add(eq)
+                store.decisions.append(
+                    EquipmentDecision(eq, "skip", note="non-interactive, no donor")
+                )
+                continue
 
         if action == "create":
             if not target:
-                print(f"  Cannot create {eq}: no template equipment available.")
+                print(f"  Cannot create {eq}: no layout donor equipment available.")
                 store.skipped.add(eq)
                 store.decisions.append(
                     EquipmentDecision(eq, "skip", note="no template")
