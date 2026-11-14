@@ -10,12 +10,14 @@ from .dates import format_ra_date, parse_date
 COST_PERIOD_RE = re.compile(
     r"^(?P<name>.+?)\s*\((?P<body>[^)]*)\)\s*$"
 )
+# Sea FR exports often put spaces around the date dash:
+#   BAF Fee (22G0 15.07.2026 - 14.08.2026)
 BODY_WITH_PERIOD_RE = re.compile(
-    r"^(?P<eq>\S+)\s+(?P<from>\d{2}\.\d{2}\.\d{4})-(?P<to>\d{2}\.\d{2}\.\d{4})$"
+    r"^(?P<eq>\S+)\s+(?P<from>\d{2}\.\d{2}\.\d{4})\s*-\s*(?P<to>\d{2}\.\d{2}\.\d{4})$"
 )
 # Weight / RoRo style: "BAF Fee (15.07.2026-14.08.2026)" — no equipment token
 BODY_PERIOD_ONLY_RE = re.compile(
-    r"^(?P<from>\d{2}\.\d{2}\.\d{4})-(?P<to>\d{2}\.\d{2}\.\d{4})$"
+    r"^(?P<from>\d{2}\.\d{2}\.\d{4})\s*-\s*(?P<to>\d{2}\.\d{2}\.\d{4})$"
 )
 BODY_EQ_ONLY_RE = re.compile(r"^(?P<eq>\S+)$")
 
@@ -101,6 +103,33 @@ def period_fee_header(fee_name: str, equipment: str | None, valid_from, valid_to
     return f"{fee_name} ({eq} {span})"
 
 
+def match_period_fee_columns(
+    cost_columns: list[CostColumn],
+    *,
+    fee_name: str,
+    equipment: str | None,
+    valid_from,
+    valid_to,
+) -> list[CostColumn]:
+    """
+    Match period fee columns by fee + equipment + dates (not exact header text).
+
+    Sea FR headers often use spaces around the date dash
+    (`15.07.2026 - 14.08.2026`); generated headers do not.
+    """
+    eq = (equipment or "").strip().upper() or None
+    out: list[CostColumn] = []
+    for c in cost_columns:
+        if c.fee_name != fee_name:
+            continue
+        c_eq = (c.equipment or "").strip().upper() or None
+        if c_eq != eq:
+            continue
+        if c.valid_from == valid_from and c.valid_to == valid_to:
+            out.append(c)
+    return out
+
+
 def legacy_dft_period_header(fee_name: str, valid_from, valid_to) -> str:
     """Alias for DFT-tagged header: BAF Fee (DFT 15.07.2026-14.08.2026)."""
     return period_fee_header(fee_name, "DFT", valid_from, valid_to)
@@ -173,18 +202,20 @@ def find_cost_columns(
     # *DFTBAF / *DFTEU_ETS: prefer BAF/ETS Fee (DFT dates); also accept period-only
     if eq == "DFT" and require_period:
         same_fee_eq = weight_period_candidates(cost_columns, fee_name=fee)
-        exact_names = []
         if valid_from is not None and valid_to is not None:
-            exact_names = [
-                period_fee_header(fee, "DFT", valid_from, valid_to),
-                period_fee_header(fee, None, valid_from, valid_to),
-            ]
-        for exact_name in exact_names:
-            by_exact = [c for c in cost_columns if c.header == exact_name]
-            if len(by_exact) == 1:
-                return [by_exact[0]], None
-            if len(by_exact) > 1:
-                return [], f"Multiple RA cost columns named {exact_name!r}"
+            for want_eq in ("DFT", None):
+                by_exact = match_period_fee_columns(
+                    cost_columns,
+                    fee_name=fee,
+                    equipment=want_eq,
+                    valid_from=valid_from,
+                    valid_to=valid_to,
+                )
+                if len(by_exact) == 1:
+                    return [by_exact[0]], None
+                if len(by_exact) > 1:
+                    label = period_fee_header(fee, want_eq, valid_from, valid_to)
+                    return [], f"Multiple RA cost columns named {label!r}"
         if valid_from is not None and valid_to is not None:
             covered = periods_cover_without_gaps(valid_from, valid_to, same_fee_eq)
             if covered:
@@ -209,12 +240,17 @@ def find_cost_columns(
     exact_name = None
     if valid_from is not None and valid_to is not None:
         exact_name = period_fee_header(fee, eq, valid_from, valid_to)
-
-    by_exact = [c for c in cost_columns if c.header == exact_name] if exact_name else []
-    if by_exact:
-        if len(by_exact) > 1:
-            return [], f"Multiple RA cost columns named {exact_name!r}"
-        return [by_exact[0]], None
+        by_exact = match_period_fee_columns(
+            cost_columns,
+            fee_name=fee,
+            equipment=eq,
+            valid_from=valid_from,
+            valid_to=valid_to,
+        )
+        if by_exact:
+            if len(by_exact) > 1:
+                return [], f"Multiple RA cost columns named {exact_name!r}"
+            return [by_exact[0]], None
 
     same_fee_eq = [
         c

@@ -13,6 +13,7 @@ from .charge_rules import DFT_WEIGHT_RATE_BY, resolve_rate_column
 from .config import CHANGED_FILL_HEX, DATA_START_ROW, HEADER_COST_ROW, HEADER_FIELD_ROW
 from .cost_map import (
     CostColumn,
+    match_period_fee_columns,
     parse_cost_header,
     period_fee_header,
 )
@@ -332,10 +333,16 @@ def create_period_cost_column(
     start = ws.max_column + 1
     header = period_fee_header(fee_name, equipment, valid_from, valid_to)
 
-    # Avoid duplicate create
-    for c in ra.cost_columns:
-        if c.header == header:
-            return c
+    # Avoid duplicate create (header text may differ on spaces around date dash)
+    existing = match_period_fee_columns(
+        ra.cost_columns,
+        fee_name=fee_name,
+        equipment=equipment,
+        valid_from=valid_from,
+        valid_to=valid_to,
+    )
+    if existing:
+        return existing[0]
 
     resolved_rate_by = _rate_by_for_period_cost(
         ra, equipment=equipment, template=template, rate_by=rate_by
@@ -476,14 +483,18 @@ def resolve_dft_period_columns(
 
     exact: list[CostColumn] = []
     for m_from, m_to in dft_periods:
-        headers = [
-            period_fee_header(fee_name, "DFT", m_from, m_to),
-            period_fee_header(fee_name, None, m_from, m_to),
-        ]
-        existing = next(
-            (c for h in headers for c in ra.cost_columns if c.header == h),
-            None,
-        )
+        existing = None
+        for want_eq in ("DFT", None):
+            hits = match_period_fee_columns(
+                ra.cost_columns,
+                fee_name=fee_name,
+                equipment=want_eq,
+                valid_from=m_from,
+                valid_to=m_to,
+            )
+            if hits:
+                existing = hits[0]
+                break
         if existing is not None:
             exact.append(existing)
 
@@ -544,19 +555,25 @@ def resolve_dft_period_columns(
 
     results: list[CostColumn] = list(exact)
     for m_from, m_to in to_create:
-        headers = [
-            period_fee_header(fee_name, "DFT", m_from, m_to),
-            period_fee_header(fee_name, None, m_from, m_to),
-        ]
-        existing = next(
-            (c for h in headers for c in ra.cost_columns if c.header == h),
-            None,
-        )
+        existing = None
+        for want_eq in ("DFT", None):
+            hits = match_period_fee_columns(
+                ra.cost_columns,
+                fee_name=fee_name,
+                equipment=want_eq,
+                valid_from=m_from,
+                valid_to=m_to,
+            )
+            if hits:
+                existing = hits[0]
+                break
         if existing is not None:
             if existing not in results:
                 results.append(existing)
             continue
-        if any(c.header in headers for c in results):
+        if any(
+            c.valid_from == m_from and c.valid_to == m_to for c in results
+        ):
             continue
 
         prev = None
@@ -566,14 +583,17 @@ def resolve_dft_period_columns(
                 break
         prolong = None
         if prev is not None:
-            prev_headers = [
-                period_fee_header(fee_name, "DFT", prev[0], prev[1]),
-                period_fee_header(fee_name, None, prev[0], prev[1]),
-            ]
-            prolong = next(
-                (c for h in prev_headers for c in ra.cost_columns if c.header == h),
-                None,
-            )
+            for want_eq in ("DFT", None):
+                hits = match_period_fee_columns(
+                    ra.cost_columns,
+                    fee_name=fee_name,
+                    equipment=want_eq,
+                    valid_from=prev[0],
+                    valid_to=prev[1],
+                )
+                if hits:
+                    prolong = hits[0]
+                    break
         created = create_period_cost_column(
             ra,
             fee_name=fee_name,
@@ -643,13 +663,15 @@ def ensure_baf_cost_columns(
     results: list[CostColumn] = []
     skipped: list[str] = []
     for m_from, m_to in months:
-        candidates = [period_fee_header("BAF Fee", eq_u, m_from, m_to)]
-        existing = next(
-            (c for h in candidates for c in ra.cost_columns if c.header == h),
-            None,
+        existing_cols = match_period_fee_columns(
+            ra.cost_columns,
+            fee_name="BAF Fee",
+            equipment=eq_u,
+            valid_from=m_from,
+            valid_to=m_to,
         )
-        if existing is not None:
-            results.append(existing)
+        if existing_cols:
+            results.append(existing_cols[0])
             continue
 
         allow = True
@@ -662,11 +684,14 @@ def ensure_baf_cost_columns(
         prev_start = _add_months(date(m_from.year, m_from.month, 1), -1)
         prev_from = date(prev_start.year, prev_start.month, 15)
         prev_to = baf_month_end(prev_from)
-        prev_headers = [period_fee_header("BAF Fee", eq_u, prev_from, prev_to)]
-        prolong = next(
-            (c for h in prev_headers for c in ra.cost_columns if c.header == h),
-            None,
+        prolong_cols = match_period_fee_columns(
+            ra.cost_columns,
+            fee_name="BAF Fee",
+            equipment=eq_u,
+            valid_from=prev_from,
+            valid_to=prev_to,
         )
+        prolong = prolong_cols[0] if prolong_cols else None
         existing = create_period_cost_column(
             ra,
             fee_name="BAF Fee",
@@ -725,12 +750,16 @@ def ensure_ets_cost_columns(
         if c.fee_name == "EU ETS Fee" and c.equipment == equipment
     ]
 
-    # 1) Exact period
-    exact_names = [period_fee_header("EU ETS Fee", eq_u, update_from, update_to)]
-    for exact_name in exact_names:
-        for c in same:
-            if c.header == exact_name:
-                return [c], None
+    # 1) Exact period (ignore spaces around date dash in header text)
+    exact = match_period_fee_columns(
+        ra.cost_columns,
+        fee_name="EU ETS Fee",
+        equipment=eq_u,
+        valid_from=update_from,
+        valid_to=update_to,
+    )
+    if exact:
+        return [exact[0]], None
 
     # 2) Single column that fully contains the update
     containers = [
@@ -752,15 +781,16 @@ def ensure_ets_cost_columns(
 
     # 3) Agreement-validity column if present and covers update
     if agreement_from and agreement_to:
-        agr_names = [
-            period_fee_header("EU ETS Fee", eq_u, agreement_from, agreement_to)
-        ]
-        for agr_name in agr_names:
-            for c in same:
-                if c.header == agr_name and period_inside(
-                    update_from, update_to, c.valid_from, c.valid_to
-                ):
-                    return [c], None
+        agr = match_period_fee_columns(
+            ra.cost_columns,
+            fee_name="EU ETS Fee",
+            equipment=eq_u,
+            valid_from=agreement_from,
+            valid_to=agreement_to,
+        )
+        for c in agr:
+            if period_inside(update_from, update_to, c.valid_from, c.valid_to):
+                return [c], None
 
     # 4) Create for exact stated days
     template = find_template_period_cost(ra, fee_name="EU ETS Fee", equipment=equipment)

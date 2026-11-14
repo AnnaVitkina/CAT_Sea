@@ -145,6 +145,24 @@ def _nums_equal(a, b) -> bool:
     return str(a).strip() == str(b).strip()
 
 
+def _cost_effectively_blank(cost: dict) -> bool:
+    """
+    True when a one-sided cost cell is empty/zero (no meaningful rate or min).
+
+    Empty baseline vs candidate rate 0 (+ optional currency) is not a real
+    presence difference — treat like both blank.
+    """
+    if cost.get("min") is not None:
+        return False
+    rate = cost.get("rate")
+    if rate is None:
+        return True
+    num = to_number(rate)
+    if num is not None:
+        return abs(float(num)) < 1e-9
+    return False
+
+
 def match_lanes(
     a_lanes: list[RaLane],
     b_lanes: list[RaLane],
@@ -313,7 +331,11 @@ def compare_workbooks(
                     }
                 )
 
+        meaningful_only_a = False
         for k in sorted(only_a):
+            if _cost_effectively_blank(ca[k]):
+                continue
+            meaningful_only_a = True
             cost_only_base.append(
                 {
                     **_lane_brief(La, "baseline"),
@@ -325,7 +347,11 @@ def compare_workbooks(
                     "period": f"{ca[k]['valid_from']}..{ca[k]['valid_to']}",
                 }
             )
+        meaningful_only_b = False
         for k in sorted(only_b):
+            if _cost_effectively_blank(cb[k]):
+                continue
+            meaningful_only_b = True
             cost_only_cand.append(
                 {
                     **_lane_brief(Lb, "candidate"),
@@ -363,7 +389,12 @@ def compare_workbooks(
                     "diffs": lane_cost_diffs,
                 }
             )
-        if not field_diffs and not lane_cost_diffs and not only_a and not only_b:
+        if (
+            not field_diffs
+            and not lane_cost_diffs
+            and not meaningful_only_a
+            and not meaningful_only_b
+        ):
             matched_identical += 1
 
     fee_rate_mismatch: dict[str, int] = defaultdict(int)

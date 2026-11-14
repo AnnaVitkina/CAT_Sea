@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from .charge_rules import resolve_rate_column
-from .cost_map import period_fee_header
+from .cost_map import match_period_fee_columns
 from .dates import format_ra_date, parse_date
 from .equipment_decisions import update_row_targets_ra
 from .parsing import to_number
@@ -120,8 +120,13 @@ def collect_missing_baf_months(
                 ignored_eq.add(eq)
                 continue
             for m_from, m_to in iter_baf_months_covering(vf, vt):
-                headers = [period_fee_header("BAF Fee", eq, m_from, m_to)]
-                if any(c.header in headers for c in ra.cost_columns):
+                if match_period_fee_columns(
+                    ra.cost_columns,
+                    fee_name="BAF Fee",
+                    equipment=eq,
+                    valid_from=m_from,
+                    valid_to=m_to,
+                ):
                     continue
                 needed.setdefault(eq, set()).add((m_from, m_to))
 
