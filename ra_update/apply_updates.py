@@ -41,7 +41,9 @@ from .lane_add import (
 )
 from .lane_identity import sync_lane_identity_from_update
 from .lane_split import (
+    clear_non_applicable_period_costs,
     compute_safe_write_validity,
+    cost_applies_on_lane,
     cost_update_leaks_outside_update,
     ensure_exact_validity_lane,
 )
@@ -175,15 +177,6 @@ class PendingLaneAdd:
     clamp_note: str | None = None
     # BASE only: KEY exists but validity does not match → create a new lane period
     force_create: bool = False
-
-
-def _cost_applies_on_lane(cost, lane) -> bool:
-    """Whether a cost header period overlaps the lane validity (period-less always applies)."""
-    if cost.valid_from is None or cost.valid_to is None:
-        return True
-    if lane.valid_from is None or lane.valid_to is None:
-        return True
-    return cost.valid_from <= lane.valid_to and cost.valid_to >= lane.valid_from
 
 
 @dataclass
@@ -1044,7 +1037,7 @@ class UpdateApplier:
                 currency = currency_for_rate(row, r["rate_col"])
 
                 for cost in costs:
-                    if not _cost_applies_on_lane(cost, write_lane):
+                    if not cost_applies_on_lane(cost, write_lane):
                         continue
 
                     # Currency from update *_CURRENCY companion (esp. newly created costs)
@@ -1117,6 +1110,14 @@ class UpdateApplier:
                                 "has no Flat/MIN column"
                             ),
                         )
+
+        # Drop period-cost leftovers that do not overlap the lane (split/copy / prior runs)
+        cleaned_rows: set[int] = set()
+        for target in write_targets.values():
+            if target.row in cleaned_rows:
+                continue
+            cleaned_rows.add(target.row)
+            clear_non_applicable_period_costs(self.ra, target)
 
         if ets_wider_than_lane:
             u_from, u_to = meta["valid_from"], meta["valid_to"]
@@ -1645,7 +1646,7 @@ class UpdateApplier:
             currency = currency_for_rate(row, r["rate_col"])
 
             for cost in costs:
-                if not _cost_applies_on_lane(cost, lane):
+                if not cost_applies_on_lane(cost, lane):
                     continue
 
                 self._write_currency(

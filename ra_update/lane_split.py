@@ -16,6 +16,45 @@ from .ra_model import RaLane, RateCardWorkbook
 GREEN = PatternFill(start_color=CHANGED_FILL_HEX, end_color=CHANGED_FILL_HEX, fill_type="solid")
 
 
+def cost_applies_on_lane(cost: CostColumn, lane: RaLane) -> bool:
+    """Whether a cost header period overlaps the lane validity (period-less always applies)."""
+    if cost.valid_from is None or cost.valid_to is None:
+        return True
+    if lane.valid_from is None or lane.valid_to is None:
+        return True
+    return cost.valid_from <= lane.valid_to and cost.valid_to >= lane.valid_from
+
+
+def clear_non_applicable_period_costs(ra: RateCardWorkbook, lane: RaLane) -> int:
+    """
+    Clear rate/min/currency cells for period costs that do not overlap this lane.
+
+    Prevents split/copy leftovers (e.g. Oct DFT BAF rates on a Jun–Sep lane).
+    Returns number of cost columns cleared.
+    """
+    cleared = 0
+    for cost in ra.cost_columns:
+        if cost.valid_from is None or cost.valid_to is None:
+            continue
+        if cost_applies_on_lane(cost, lane):
+            continue
+        touched = False
+        for col in (
+            cost.currency_col,
+            cost.flat_col,
+            cost.punit_col,
+        ):
+            if col is None:
+                continue
+            cell = ra.ws.cell(lane.row, col)
+            if cell.value not in (None, ""):
+                cell.value = None
+                touched = True
+        if touched:
+            cleared += 1
+    return cleared
+
+
 def cost_update_leaks_outside_update(
     lane: RaLane,
     costs: list[CostColumn],
@@ -235,12 +274,14 @@ def ensure_exact_validity_lane(
     has_before = t_from > l_from
     has_after = t_to < l_to
 
+    touched: list[RaLane] = []
+
     # Case: target starts at lane start → keep original as target, append after if needed
     if not has_before:
         if has_after:
             # Duplicate the after-segment first while the full original values are intact
             after_from = t_to + timedelta(days=1)
-            _duplicate_lane(
+            after_lane = _duplicate_lane(
                 ra,
                 source=lane,
                 valid_from=after_from,
@@ -248,6 +289,7 @@ def ensure_exact_validity_lane(
                 action_label="duplicate_after",
                 actions=actions,
             )
+            touched.append(after_lane)
         _set_validity(ra, lane.row, t_from, t_to)
         _refresh_lane_object(ra, lane, t_from, t_to)
         actions.append(
@@ -265,6 +307,9 @@ def ensure_exact_validity_lane(
                 ),
             )
         )
+        touched.append(lane)
+        for L in touched:
+            clear_non_applicable_period_costs(ra, L)
         return lane, actions
 
     # Case: has before → cut original to before, duplicate target (+ after)
@@ -289,6 +334,7 @@ def ensure_exact_validity_lane(
             ),
         )
     )
+    touched.append(lane)
 
     # Duplicate from the (still fully valued) cut row — costs/other fields unchanged
     update_lane = _duplicate_lane(
@@ -299,10 +345,11 @@ def ensure_exact_validity_lane(
         action_label="duplicate_update",
         actions=actions,
     )
+    touched.append(update_lane)
 
     if has_after:
         after_from = t_to + timedelta(days=1)
-        _duplicate_lane(
+        after_lane = _duplicate_lane(
             ra,
             source=lane,
             valid_from=after_from,
@@ -310,7 +357,10 @@ def ensure_exact_validity_lane(
             action_label="duplicate_after",
             actions=actions,
         )
+        touched.append(after_lane)
 
+    for L in touched:
+        clear_non_applicable_period_costs(ra, L)
     return update_lane, actions
 
 

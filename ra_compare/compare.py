@@ -75,8 +75,13 @@ def _cell_str(ra: RateCardWorkbook, row: int, col: int | None) -> str:
 
 
 def _lane_costs(ra: RateCardWorkbook, lane: RaLane) -> dict[str, dict]:
+    from ra_update.lane_split import cost_applies_on_lane
+
     out: dict[str, dict] = {}
     for cc in ra.cost_columns:
+        # Ignore period costs that do not overlap this lane (leftover cell values)
+        if not cost_applies_on_lane(cc, lane):
+            continue
         rate = _cell_rate(ra, lane.row, cc.rate_col)
         mn = _cell_num(ra, lane.row, cc.min_col)
         cur = _cell_str(ra, lane.row, cc.currency_col)
