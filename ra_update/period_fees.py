@@ -467,11 +467,10 @@ def resolve_dft_period_columns(
       2) Else use any existing DFT columns that together cover the update
          without gaps (their own validities — not only pivot-exact headers).
       3) Else use existing exact catalog periods matching derived dft_periods.
-      4) If DFT columns overlap the update but still cannot cover without gaps
-         → issue; do NOT create sliced columns.
-      5) When no DFT column overlaps this update, create only uncovered
-         remainders (catalog ∩ update minus existing DFT validity) — never
-         recreate earlier catalog slices that overlap other existing columns.
+      4) Else create only uncovered remainders of the update (catalog ∩ update
+         and any leftover holes) — never recreate periods that already exist.
+         Partial overlap is OK: fill the gap (e.g. 01.11–31.08 after
+         15.07–14.10 + 15.10–31.10) instead of failing.
     """
     from .period_cover import periods_cover_without_gaps
 
@@ -519,26 +518,7 @@ def resolve_dft_period_columns(
     if covering:
         return covering, None
 
-    overlapping = [
-        c
-        for c in same
-        if c.valid_from is not None
-        and c.valid_to is not None
-        and _periods_overlap(update_from, update_to, c.valid_from, c.valid_to)
-    ]
-    if overlapping:
-        cand_txt = ", ".join(
-            f"{c.header} validity="
-            f"{format_ra_date(c.valid_from)}-{format_ra_date(c.valid_to)}"
-            for c in overlapping
-        )
-        return [], (
-            f"DFT {fee_name}: potential cost column(s) present but validity does not "
-            f"match update {format_ra_date(update_from)}-{format_ra_date(update_to)}; "
-            f"not creating new columns. candidates=[{cand_txt}]"
-        )
-
-    # No overlap with this update → create only uncovered catalog remainders
+    # Partial / no cover → create only uncovered remainders (do not fail on overlap)
     template = find_template_period_cost(ra, fee_name=fee_name, equipment="DFT")
     if template is None and template_fee_fallback:
         template = find_template_period_cost(
@@ -569,6 +549,14 @@ def resolve_dft_period_columns(
                 continue
             seen.add((rf, rt))
             to_create.append((rf, rt))
+
+    # Any leftover hole in the update not covered by existing + planned catalog slices
+    planned = list(existing_periods) + list(to_create)
+    for rf, rt in uncovered_period_segments(update_from, update_to, planned):
+        if (rf, rt) in seen:
+            continue
+        seen.add((rf, rt))
+        to_create.append((rf, rt))
 
     results: list[CostColumn] = list(exact)
     for m_from, m_to in to_create:
@@ -611,6 +599,15 @@ def resolve_dft_period_columns(
                 if hits:
                     prolong = hits[0]
                     break
+        if prolong is None:
+            # Prefer prolong from the latest existing DFT column ending just before
+            prior = [
+                c
+                for c in same
+                if c.valid_to is not None and c.valid_to < m_from
+            ]
+            if prior:
+                prolong = max(prior, key=lambda c: c.valid_to or c.valid_from)
         created = create_period_cost_column(
             ra,
             fee_name=fee_name,
